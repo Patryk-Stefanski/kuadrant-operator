@@ -1,0 +1,33 @@
+# Selectively sync only CRDs and ClusterRoles from developer-portal-controller
+# ServiceAccount, ClusterRoleBinding, and Deployment are created by the kuadrant-operator reconciler
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Prefix to avoid name conflicts with other ClusterRoles
+namePrefix: developer-portal-controller-
+
+resources:
+# CRDs
+- https://raw.githubusercontent.com/Kuadrant/developer-portal-controller/${DEVELOPERPORTAL_GITREF}/config/crd/bases/devportal.kuadrant.io_apikeys.yaml
+- https://raw.githubusercontent.com/Kuadrant/developer-portal-controller/${DEVELOPERPORTAL_GITREF}/config/crd/bases/devportal.kuadrant.io_apiproducts.yaml
+# ClusterRole for manager (contains permissions needed by controller)
+- https://raw.githubusercontent.com/Kuadrant/developer-portal-controller/${DEVELOPERPORTAL_GITREF}/config/rbac/role.yaml
+# Leader election Role (namespace-scoped)
+- https://raw.githubusercontent.com/Kuadrant/developer-portal-controller/${DEVELOPERPORTAL_GITREF}/config/rbac/leader_election_role.yaml
+
+# Label ClusterRole and Role so they appear in kuadrant-operator topology
+patches:
+- patch: |-
+    - op: add
+      path: /metadata/labels
+      value:
+        kuadrant.io/developerportal: "true"
+  target:
+    kind: ClusterRole
+- patch: |-
+    - op: add
+      path: /metadata/labels
+      value:
+        kuadrant.io/developerportal: "true"
+  target:
+    kind: Role
