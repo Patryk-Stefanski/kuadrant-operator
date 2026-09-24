@@ -357,15 +357,8 @@ jobs:
             exit 1
           fi
 
-      - name: Deploy Redis and allow MCP Gateway connections
+      - name: Allow MCP Gateway connections to Redis
         run: |
-          kubectl apply -n kuadrant-system \
-            -f mcp-gateway/config/mcp-gateway/overlays/mcp-system/redis-deployment.yaml
-          kubectl apply -n kuadrant-system \
-            -f mcp-gateway/config/mcp-gateway/overlays/mcp-system/redis-service.yaml
-          kubectl rollout status deployment/redis \
-            -n kuadrant-system --timeout=60s
-
           kubectl apply -n kuadrant-system -f - <<'EOF'
           apiVersion: networking.k8s.io/v1
           kind: NetworkPolicy
