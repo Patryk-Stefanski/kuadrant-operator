@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       mcp_ref:
-        description: MCP Gateway ref (commit SHA or branch) for reproducing a nightly failure; operator checkout remains on main
+        description: MCP Gateway ref (commit SHA or branch) for reproducing a nightly failure; operator checkout uses this workflow ref
         required: false
         default: main
         type: string
@@ -34,10 +34,10 @@ jobs:
         shell: bash
 
     steps:
-      - name: Check out operator main
+      - name: Check out operator workflow ref
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # ratchet:actions/checkout@v4
         with:
-          ref: main
+          ref: ${{ github.sha }}
           persist-credentials: false
 
       - name: Check out MCP Gateway source
@@ -356,6 +356,43 @@ jobs:
               "${broker_pull_policy:-<empty>}" >&2
             exit 1
           fi
+
+      - name: Deploy Redis and allow MCP Gateway connections
+        run: |
+          kubectl apply -n kuadrant-system \
+            -f mcp-gateway/config/mcp-gateway/overlays/mcp-system/redis-deployment.yaml
+          kubectl apply -n kuadrant-system \
+            -f mcp-gateway/config/mcp-gateway/overlays/mcp-system/redis-service.yaml
+          kubectl rollout status deployment/redis \
+            -n kuadrant-system --timeout=60s
+
+          kubectl apply -n kuadrant-system -f - <<'EOF'
+          apiVersion: networking.k8s.io/v1
+          kind: NetworkPolicy
+          metadata:
+            name: redis-allow-mcp-gateway
+          spec:
+            podSelector:
+              matchLabels:
+                app: redis
+            policyTypes:
+              - Ingress
+            ingress:
+              - from:
+                  - podSelector:
+                      matchLabels:
+                        app.kubernetes.io/managed-by: mcp-gateway-controller
+                        app.kubernetes.io/name: mcp-gateway
+                ports:
+                  - protocol: TCP
+                    port: 6379
+          EOF
+
+          kubectl get pods -n kuadrant-system \
+            -l app.kubernetes.io/managed-by=mcp-gateway-controller,app.kubernetes.io/name=mcp-gateway \
+            --show-labels
+          kubectl get networkpolicy kuadrant-operator-default-deny-all mcp-gateway redis-allow-mcp-gateway \
+            -n kuadrant-system -o yaml
 
       - name: Assert deployed image identities
         run: |
