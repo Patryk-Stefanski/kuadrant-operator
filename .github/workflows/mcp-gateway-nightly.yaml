@@ -10,6 +10,12 @@ on:
         required: false
         default: main
         type: string
+      e2e_focus:
+        description: Optional Ginkgo focus expression for a focused MCP E2E investigation
+        required: false
+        default: ''
+        type: string
+
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -357,8 +363,11 @@ jobs:
             exit 1
           fi
 
-      - name: Allow MCP Gateway connections to Redis
+      - name: Deploy Redis and allow MCP Gateway connections
         run: |
+          make -C mcp-gateway \
+            MCP_GATEWAY_NAMESPACE=kuadrant-system \
+            deploy-redis
           kubectl apply -n kuadrant-system -f - <<'EOF'
           apiVersion: networking.k8s.io/v1
           kind: NetworkPolicy
@@ -384,6 +393,7 @@ jobs:
           kubectl get pods -n kuadrant-system \
             -l app.kubernetes.io/managed-by=mcp-gateway-controller,app.kubernetes.io/name=mcp-gateway \
             --show-labels
+          kubectl get pods -n kuadrant-system -l app=redis --show-labels
           kubectl get networkpolicy kuadrant-operator-default-deny-all mcp-gateway redis-allow-mcp-gateway \
             -n kuadrant-system -o yaml
 
@@ -482,21 +492,43 @@ jobs:
           E2E_DOMAIN: 127-0-0-1.sslip.io
           E2E_SCHEME: http
           GATEWAY_CLASS_NAME: istio
+          E2E_FOCUS: ${{ inputs.e2e_focus || '' }}
         run: |
           mkdir -p "$RUNNER_TEMP/mcp-gateway-nightly"
           ginkgo_version="$(cd mcp-gateway && go list -m -f '{{.Version}}' github.com/onsi/ginkgo/v2)"
           echo "Using Ginkgo CLI ${ginkgo_version}"
-          MCP_GATEWAY_NAMESPACE="$MCP_GATEWAY_NAMESPACE" \
-          GATEWAY_NAMESPACE="$GATEWAY_NAMESPACE" \
-          TEST_SERVER_NAMESPACE="$TEST_SERVER_NAMESPACE" \
-          E2E_DOMAIN="$E2E_DOMAIN" \
-          E2E_SCHEME="$E2E_SCHEME" \
-          GATEWAY_CLASS_NAME="$GATEWAY_CLASS_NAME" \
-          make -C mcp-gateway \
-            GINKGO_VERSION="$ginkgo_version" \
-            E2E_TIMEOUT=60m \
-            test-e2e-ci-full E2E_PROCS=4 \
-            2>&1 | tee "$RUNNER_TEMP/mcp-gateway-nightly/e2e.log"
+          set +e
+          if [[ -n "$E2E_FOCUS" ]]; then
+            make -C mcp-gateway \
+              GINKGO_VERSION="$ginkgo_version" \
+              test-e2e-deps
+            (
+              cd mcp-gateway
+              ./bin/ginkgo -v --tags=e2e --procs=1 --timeout=60m \
+                --focus="$E2E_FOCUS" ./tests/e2e
+            ) 2>&1 | tee "$RUNNER_TEMP/mcp-gateway-nightly/e2e.log"
+            test_status=${PIPESTATUS[0]}
+          else
+            MCP_GATEWAY_NAMESPACE="$MCP_GATEWAY_NAMESPACE" \
+            GATEWAY_NAMESPACE="$GATEWAY_NAMESPACE" \
+            TEST_SERVER_NAMESPACE="$TEST_SERVER_NAMESPACE" \
+            E2E_DOMAIN="$E2E_DOMAIN" \
+            E2E_SCHEME="$E2E_SCHEME" \
+            GATEWAY_CLASS_NAME="$GATEWAY_CLASS_NAME" \
+            make -C mcp-gateway \
+              GINKGO_VERSION="$ginkgo_version" \
+              E2E_TIMEOUT=60m \
+              test-e2e-ci-full E2E_PROCS=4 \
+              2>&1 | tee "$RUNNER_TEMP/mcp-gateway-nightly/e2e.log"
+            test_status=${PIPESTATUS[0]}
+          fi
+          set -e
+          for dump in /tmp/e2e-cluster-dump-*.txt; do
+            if [[ -f "$dump" ]]; then
+              cp "$dump" "$RUNNER_TEMP/mcp-gateway-nightly/"
+            fi
+          done
+          exit "$test_status"
 
       - name: Collect diagnostics on failure
         if: failure()
@@ -506,11 +538,14 @@ jobs:
             make -C mcp-gateway ci-debug-logs ci-debug-test-servers-logs || true
             kubectl logs -n kuadrant-system deployment/mcp-gateway-controller --tail=200 || true
             kubectl logs -n kuadrant-system deployment/mcp-gateway --tail=200 || true
+            kubectl get pods,deployments,replicasets,events -n kuadrant-system \
+              --sort-by=.lastTimestamp -o wide || true
             kubectl get pods,deployments,gateways,httproutes -A -o wide || true
             kubectl get kuadrantcontrolplane default -o yaml || true
             kubectl get mcpgatewayextensions,mcpserverregistrations -A -o yaml || true
             kubectl cluster-info dump || true
           } 2>&1 | tee "$RUNNER_TEMP/mcp-gateway-nightly/diagnostics.log"
+
 
       - name: Publish nightly summary
         if: always()
