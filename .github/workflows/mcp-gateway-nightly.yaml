@@ -363,11 +363,8 @@ jobs:
             exit 1
           fi
 
-      - name: Deploy Redis and allow MCP Gateway connections
+      - name: Allow MCP Gateway connections to Redis
         run: |
-          make -C mcp-gateway \
-            MCP_GATEWAY_NAMESPACE=kuadrant-system \
-            deploy-redis
           kubectl apply -n kuadrant-system -f - <<'EOF'
           apiVersion: networking.k8s.io/v1
           kind: NetworkPolicy
