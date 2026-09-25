@@ -15,6 +15,15 @@ on:
         required: false
         default: ''
         type: string
+      redis_network_policy:
+        description: Apply the ITP Redis ingress policy
+        required: false
+        default: enabled
+        type: choice
+        options:
+          - enabled
+          - disabled
+
 
 
 concurrency:
@@ -363,7 +372,14 @@ jobs:
             exit 1
           fi
 
+      - name: Prepare Redis fixture for MCP E2E
+        run: |
+          make -C mcp-gateway \
+            MCP_GATEWAY_NAMESPACE=kuadrant-system \
+            deploy-redis
+
       - name: Allow MCP Gateway connections to Redis
+        if: ${{ inputs.redis_network_policy != 'disabled' }}
         run: |
           kubectl apply -n kuadrant-system -f - <<'EOF'
           apiVersion: networking.k8s.io/v1
